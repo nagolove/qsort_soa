@@ -59,43 +59,79 @@ void levels_shutdown(struct LEVELS *lvls) {
 typedef int (*QSortCmpFunc)(void *a, void *b);
 typedef void (*QSortSwapFunc)(size_t index1, size_t index2, void *udata);
 
+struct QSortCtx {
+    char *arr, *arr_initial;
+    void *udata;
+    size_t nmemb, size;
+    QSortCmpFunc cmp;
+    QSortSwapFunc swap;
+};
+
+void _koh_qsort_soa(struct QSortCtx *ctx) {
+    if (ctx->nmemb < 2)
+        return;
+
+    char *swap_tmp[ctx->size];
+    char *_arr = ctx->arr;
+    char *pivot = _arr + ctx->size * (ctx->nmemb / 2);
+    size_t i, j;
+    for (i = 0, j = ctx->nmemb - 1; ; i++, j--) {
+        // FIXME: Обратный порядок сортировки
+        while (ctx->cmp(_arr + ctx->size * i, pivot) < 0) i++;
+        while (ctx->cmp(_arr + ctx->size * j, pivot) > 0) j--;
+        if (i >= j) break;
+
+        char *i_ptr = _arr + i * ctx->size;
+        char *j_ptr = _arr + j * ctx->size;
+        memmove(swap_tmp, i_ptr, ctx->size);
+        memmove(i_ptr, j_ptr, ctx->size);
+        memmove(j_ptr, swap_tmp, ctx->size);
+        size_t abs_i = (i_ptr - ctx->arr_initial) / ctx->size;
+        size_t abs_j = (j_ptr - ctx->arr_initial) / ctx->size;
+        if (ctx->swap) ctx->swap(abs_i, abs_j, ctx->udata);
+    }
+
+    struct QSortCtx ctx1;
+    ctx1.arr = ctx->arr;
+    ctx1.arr_initial = ctx->arr_initial;
+    ctx1.cmp = ctx->cmp;
+    ctx1.nmemb = i;
+    ctx1.size = ctx->size;
+    ctx1.swap = ctx->swap;
+    ctx1.udata = ctx->udata;
+    _koh_qsort_soa(&ctx1);
+    struct QSortCtx ctx2;
+    ctx2.arr = ctx->arr + ctx->size * i;
+    ctx2.arr_initial = ctx->arr_initial;
+    ctx2.cmp = ctx->cmp;
+    ctx2.nmemb = ctx->nmemb - i;
+    ctx2.size = ctx->size;
+    ctx2.swap = ctx->swap;
+    ctx2.udata = ctx->udata;
+    _koh_qsort_soa(&ctx2);
+}
+
 void koh_qsort_soa(
     void *arr, size_t nmemb, size_t size, 
     QSortCmpFunc cmp, QSortSwapFunc swap,
     void *udata
 ) {
-    //printf("koh_qsort_soa: arr %p, nmemb %zu, size %zu\n", arr, nmemb, size);
-    assert(arr);
-    assert(cmp);
-
-    if (nmemb < 2)
-        return;
-
-    char *swap_tmp[size];
-    char *_arr = arr;
-    char *pivot = _arr + size * (nmemb / 2);
-    size_t i, j;
-    for (i = 0, j = nmemb - 1; ; i++, j--) {
-        // FIXME: Обратный порядок сортировки
-        while (cmp(_arr + size * i, pivot) < 0) i++;
-        while (cmp(_arr + size * j, pivot) > 0) j--;
-        if (i >= j) break;
-
-        memmove(swap_tmp, _arr + i * size, size);
-        memmove(_arr + i * size, _arr + j * size, size);
-        memmove(_arr + j * size, swap_tmp, size);
-        if (swap) swap(i, j, udata);
-    }
-
-    koh_qsort_soa(arr, i, size, cmp, swap, udata);
-    koh_qsort_soa(_arr + size * i, nmemb - i, size, cmp, swap, udata);
+    struct QSortCtx ctx = {
+        .nmemb = nmemb,
+        .arr = arr,
+        .arr_initial = arr,
+        .cmp = cmp,
+        .udata = udata,
+        .swap = swap,
+        .size = size,
+    };
+    _koh_qsort_soa(&ctx);
 }
-
 
 static int cmp(void *a, void *b) {
     char **_a = a, **_b = b;
     int res = strcmp(*_a, *_b);
-    printf("cmp: %s, %s, res %d\n", *_a, *_b, res);
+    /*printf("cmp: %s, %s, res %d\n", *_a, *_b, res);*/
     return -1 * res;
 }
 
@@ -135,23 +171,21 @@ static int cmp_int_rev(void *a, void *b) {
     return *_b - *_a;
 }
 
-void test_num_array_sort(QSortCmpFunc cmp) {
-    int arr[] = {0, 2, 3, 10, 9, 7, 6, 3, 1, -1, -2, 0, 17};
-    int len = sizeof(arr) / sizeof(arr[0]);
+void test_num_array_sort(int *arr, int len, QSortCmpFunc cmp) {
+    printf("in: ");
     for (int i = 0; i < len; i++) {
         printf("%d ", arr[i]);
     }
-    printf("\n");
     printf("\n");
 
     koh_qsort_soa(
         arr, len, sizeof(arr[0]), cmp, 
         NULL, NULL
     );
+    printf("out: ");
     for (int i = 0; i < len; i++) {
         printf("%d ", arr[i]);
     }
-    printf("\n");
     printf("\n");
 }
 
@@ -181,18 +215,18 @@ int quicksort_test(QSortCmpFunc cmp) {
     int n = sizeof a / sizeof a[0];
 
     int i;
+    printf("in: ");
     for (i = 0; i < n; i++) {
         printf("%d ", a[i]);
     }
-    printf("\n");
     printf("\n");
 
     quicksort(a, n, cmp);
 
+    printf("out: ");
     for (i = 0; i < n; i++) {
         printf("%d ", a[i]);
     }
-    printf("\n");
     printf("\n");
 
     return 0;
@@ -202,8 +236,18 @@ int quicksort_test(QSortCmpFunc cmp) {
 
 int main() {
     test_levels_sort();
-    test_num_array_sort(cmp_int);
-    test_num_array_sort(cmp_int_rev);
+
+    int arr1[] = {0, 2, 3, 10, 9, 7, 6, 3, 1, -1, -2, 0, 17};
+    int len1 = sizeof(arr1) / sizeof(arr1[0]);
+    test_num_array_sort(arr1, len1, cmp_int);
+    test_num_array_sort(arr1, len1, cmp_int_rev);
+
+    int arr2[] = {0, 2, 3, 2, 9, 7, 16, 3, 2, 2, -2, 0, 27, -6};
+    int len2 = sizeof(arr2) / sizeof(arr2[0]);
+    test_num_array_sort(arr2, len2, cmp_int);
+    test_num_array_sort(arr2, len2, cmp_int_rev);
+
+
     quicksort_test(cmp_int);
     quicksort_test(cmp_int_rev);
     return 0;
